@@ -5,7 +5,7 @@ from datetime import datetime
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import IsolationForest
 
-# -------------------------------
+# ------------------------------- 
 # PAGE CONFIG
 # -------------------------------
 st.set_page_config(
