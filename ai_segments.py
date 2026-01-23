@@ -94,3 +94,60 @@ if uploaded_file:
         df['vendor_enc'] = le.fit_transform(df['client'])
         df['duplicate_flag'] = df.duplicated(
             subset=['client', 'id_invoice', 'total'],
+            keep=False
+        ).astype(int)
+
+        # -----------------------------------
+        # AI ANOMALY AGENT
+        # -----------------------------------
+        model = IsolationForest(contamination=0.1, random_state=42)
+        df['anomaly'] = model.fit_predict(df[['total']])
+        df['anomaly'] = df['anomaly'].map({1: 0, -1: 1})
+
+        # -----------------------------------
+        # PAYMENT AGENT
+        # -----------------------------------
+        today = datetime.today()
+        df['days_to_due'] = (df['dueDate'] - today).dt.days
+
+        df['payment_priority'] = np.where(
+            (df['days_to_due'] <= 7) &
+            (df['anomaly'] == 0) &
+            (df['duplicate_flag'] == 0) &
+            (df['is_valid'] == True),
+            'HIGH',
+            'HOLD'
+        )
+
+        # -----------------------------------
+        # DASHBOARD
+        # -----------------------------------
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("📄 Total", len(df))
+        col2.metric("✅ Valid", df['is_valid'].sum())
+        col3.metric("🔁 Duplicates", df['duplicate_flag'].sum())
+        col4.metric("🚨 Anomalies", df['anomaly'].sum())
+        col5.metric("💰 Pay Now", (df['payment_priority'] == 'HIGH').sum())
+
+        st.divider()
+
+        st.subheader("📊 Payment Priority")
+        st.bar_chart(df['payment_priority'].value_counts())
+
+        st.subheader("📋 Invoice Data")
+        st.dataframe(
+            df[['id_invoice', 'client', 'total',
+                'is_valid', 'duplicate_flag',
+                'anomaly', 'payment_priority']],
+            use_container_width=True
+        )
+
+        st.download_button(
+            "⬇ Download Processed CSV",
+            df.to_csv(index=False).encode(),
+            "processed_invoices_output.csv",
+            "text/csv"
+        )
+
+else:
+    st.info("👆 Upload any invoice CSV file to begin")
