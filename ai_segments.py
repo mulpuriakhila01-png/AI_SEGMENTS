@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 st.title("🤖 Smart AI Invoice Processing System")
-st.caption("Works with ANY invoice CSV format")
+st.caption("Schema-agnostic AI system for any invoice CSV")
 
 # -----------------------------------
 # FILE UPLOAD
@@ -44,18 +44,23 @@ def auto_map_columns(df):
     return mapped
 
 if uploaded_file:
+
+    # -----------------------------------
+    # LOAD DATA
+    # -----------------------------------
     df_raw = pd.read_csv(uploaded_file)
-    st.success("✅ File Uploaded Successfully")
+    st.success("✅ File uploaded successfully")
 
     detected_map = auto_map_columns(df_raw)
 
     st.subheader("🔍 Column Mapping")
-    st.info("Auto-detected columns. You can change if needed.")
+    st.info("Auto-detected columns. Please confirm or change if needed.")
 
     user_map = {}
     for field in COLUMN_MAP.keys():
         options = df_raw.columns.tolist()
         default = detected_map.get(field)
+
         user_map[field] = st.selectbox(
             f"Select column for **{field}**",
             options,
@@ -64,6 +69,9 @@ if uploaded_file:
 
     if st.button("🚀 Run AI Analysis"):
 
+        # -----------------------------------
+        # RENAME COLUMNS (SAFE)
+        # -----------------------------------
         df = df_raw.rename(columns={
             user_map["id_invoice"]: "id_invoice",
             user_map["client"]: "client",
@@ -74,80 +82,115 @@ if uploaded_file:
         })
 
         # -----------------------------------
-        # DATE PARSING (ROBUST)
+        # CRITICAL FIX: REMOVE DUPLICATE COLUMNS
         # -----------------------------------
-        df['issuedDate'] = pd.to_datetime(df['issuedDate'], errors='coerce')
-        df['dueDate'] = pd.to_datetime(df['dueDate'], errors='coerce')
+        df.columns = df.columns.astype(str)
+        df = df.loc[:, ~df.columns.duplicated()]
+        df = df.dropna(axis=1, how='all')
 
         # -----------------------------------
-        # VALIDATION AGENT
+        # SAFE DATE PARSING
         # -----------------------------------
-        df['is_valid'] = True
-        df.loc[df['total'] <= 0, 'is_valid'] = False
-        expected_gst = df['total'] * 0.18
-        df.loc[abs(df['tax'] - expected_gst) > 100, 'is_valid'] = False
+        if "issuedDate" in df.columns:
+            df["issuedDate"] = pd.to_datetime(df["issuedDate"], errors="coerce")
+
+        if "dueDate" in df.columns:
+            df["dueDate"] = pd.to_datetime(df["dueDate"], errors="coerce")
 
         # -----------------------------------
-        # DUPLICATE AGENT
+        # INVOICE VALIDATION AGENT
+        # -----------------------------------
+        df["is_valid"] = True
+        df.loc[df["total"] <= 0, "is_valid"] = False
+
+        expected_gst = df["total"] * 0.18
+        df.loc[abs(df["tax"] - expected_gst) > 100, "is_valid"] = False
+
+        # -----------------------------------
+        # DUPLICATE DETECTION AGENT
         # -----------------------------------
         le = LabelEncoder()
-        df['vendor_enc'] = le.fit_transform(df['client'])
-        df['duplicate_flag'] = df.duplicated(
-            subset=['client', 'id_invoice', 'total'],
+        df["vendor_enc"] = le.fit_transform(df["client"].astype(str))
+
+        df["duplicate_flag"] = df.duplicated(
+            subset=["client", "id_invoice", "total"],
             keep=False
         ).astype(int)
 
         # -----------------------------------
-        # AI ANOMALY AGENT
+        # AI ANOMALY DETECTION AGENT
         # -----------------------------------
         model = IsolationForest(contamination=0.1, random_state=42)
-        df['anomaly'] = model.fit_predict(df[['total']])
-        df['anomaly'] = df['anomaly'].map({1: 0, -1: 1})
+        df["anomaly"] = model.fit_predict(df[["total"]])
+        df["anomaly"] = df["anomaly"].map({1: 0, -1: 1})
 
         # -----------------------------------
-        # PAYMENT AGENT
+        # PAYMENT SCHEDULING AGENT
         # -----------------------------------
         today = datetime.today()
-        df['days_to_due'] = (df['dueDate'] - today).dt.days
+        df["days_to_due"] = (df["dueDate"] - today).dt.days
 
-        df['payment_priority'] = np.where(
-            (df['days_to_due'] <= 7) &
-            (df['anomaly'] == 0) &
-            (df['duplicate_flag'] == 0) &
-            (df['is_valid'] == True),
-            'HIGH',
-            'HOLD'
+        df["payment_priority"] = np.where(
+            (df["days_to_due"] <= 7) &
+            (df["anomaly"] == 0) &
+            (df["duplicate_flag"] == 0) &
+            (df["is_valid"] == True),
+            "HIGH",
+            "HOLD"
         )
 
         # -----------------------------------
-        # DASHBOARD
+        # DASHBOARD METRICS
         # -----------------------------------
         col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("📄 Total", len(df))
-        col2.metric("✅ Valid", df['is_valid'].sum())
-        col3.metric("🔁 Duplicates", df['duplicate_flag'].sum())
-        col4.metric("🚨 Anomalies", df['anomaly'].sum())
-        col5.metric("💰 Pay Now", (df['payment_priority'] == 'HIGH').sum())
+
+        col1.metric("📄 Total Invoices", len(df))
+        col2.metric("✅ Valid", int(df["is_valid"].sum()))
+        col3.metric("🔁 Duplicates", int(df["duplicate_flag"].sum()))
+        col4.metric("🚨 Anomalies", int(df["anomaly"].sum()))
+        col5.metric("💰 Ready for Payment", int((df["payment_priority"] == "HIGH").sum()))
 
         st.divider()
 
-        st.subheader("📊 Payment Priority")
-        st.bar_chart(df['payment_priority'].value_counts())
+        # -----------------------------------
+        # CHARTS
+        # -----------------------------------
+        colA, colB = st.columns(2)
 
-        st.subheader("📋 Invoice Data")
+        with colA:
+            st.subheader("🚨 Anomaly Distribution")
+            st.bar_chart(df["anomaly"].value_counts())
+
+        with colB:
+            st.subheader("💰 Payment Priority")
+            st.bar_chart(df["payment_priority"].value_counts())
+
+        # -----------------------------------
+        # DATA TABLE
+        # -----------------------------------
+        st.subheader("📋 Processed Invoice Data")
         st.dataframe(
-            df[['id_invoice', 'client', 'total',
-                'is_valid', 'duplicate_flag',
-                'anomaly', 'payment_priority']],
+            df[[
+                "id_invoice",
+                "client",
+                "total",
+                "is_valid",
+                "duplicate_flag",
+                "anomaly",
+                "payment_priority"
+            ]],
             use_container_width=True
         )
 
+        # -----------------------------------
+        # DOWNLOAD
+        # -----------------------------------
         st.download_button(
             "⬇ Download Processed CSV",
-            df.to_csv(index=False).encode(),
+            df.to_csv(index=False).encode("utf-8"),
             "processed_invoices_output.csv",
             "text/csv"
         )
 
 else:
-    st.info("👆 Upload any invoice CSV file to begin")
+    st.info("👆 Upload any invoice CSV file to begin analysis")
